@@ -166,7 +166,7 @@ const Hero = () => {
         <div className="order-1 md:order-2 flex justify-center relative">
           <div className="relative w-full max-w-sm">
             <img
-              src="/product.png"
+              src="/product.jpg"
               alt="Nerve Fresh Bottle"
               className="w-full rounded-2xl shadow-2xl border-4 border-white"
             />
