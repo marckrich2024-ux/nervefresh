@@ -83,175 +83,105 @@
   <div id="root"></div>
   <script type="module" src="/index.tsx"></script>
   <script>
-      < script >
       (function () {
-        // O que pode chegar na URL
-        const IN_KEYS = ["gclid", "wbraid", "gbraid"];
-
-        // O que vamos garantir que saia no link final
-        // (ClickBank/integrações frequentemente usam clid)
-        const OUT_MAP = {
-          gclid: "gclid",
-          clid: "gclid",
-          wbraid: "wbraid",
-          gbraid: "gbraid"
-        };
-
         const COOKIE_NAME = "ads_click_ids";
         const COOKIE_DAYS = 90;
-        const VENDOR_HOST_MATCH = "secure.nervefresh.com";
+        const VENDOR_DOMAIN = "secure.nervefresh.com";
 
+        // MAPA DE PARÂMETROS:
+        // A chave é como vai pro ClickBank (clid)
+        // O valor é o que pegamos da URL/Cookie (gclid)
+        const OUT_TO_IN_MAP = {
+          "clid": "gclid",     // ClickBank exige 'clid', nós pegamos 'gclid'
+          "wbraid": "wbraid",
+          "gbraid": "gbraid",
+          "gclid": "gclid"     // Mandamos o original também por garantia
+        };
+
+        // --- Helpers de Cookie/URL ---
         function qs(key) {
           return new URLSearchParams(window.location.search).get(key);
         }
-
         function setCookie(name, value, days) {
           const maxAge = days * 24 * 60 * 60;
           document.cookie = `${name}=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; SameSite=Lax`;
         }
-
         function getCookie(name) {
           const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
           return match ? decodeURIComponent(match[2]) : null;
         }
-
         function safeParse(str) {
-          try { return JSON.parse(str); } catch (e) { return {}; }
+          try { return JSON.parse(str); } catch { return {}; }
         }
 
-        function readStored() {
-          return safeParse(getCookie(COOKIE_NAME) || "{}");
-        }
-
-        function writeStored(obj) {
-          setCookie(COOKIE_NAME, JSON.stringify(obj), COOKIE_DAYS);
-        }
-
-        // 1) captura da URL
+        // --- 1. Captura e Persistência (Executa no Load) ---
         const captured = {};
-        IN_KEYS.forEach(k => {
+        const uniqueKeys = new Set(Object.values(OUT_TO_IN_MAP));
+        uniqueKeys.forEach(k => {
           const v = qs(k);
           if (v) captured[k] = v;
         });
 
-        // 2) merge com cookie
-        const stored = readStored();
+        const stored = safeParse(getCookie(COOKIE_NAME) || "{}");
         const merged = Object.assign({}, stored, captured);
-        writeStored(merged);
+        setCookie(COOKIE_NAME, JSON.stringify(merged), COOKIE_DAYS);
 
-        // 3) params finais (preferir live URL, senão cookie)
-        function buildFinalParams() {
-          const final = {};
-          Object.keys(OUT_MAP).forEach(outKey => {
-            const inKey = OUT_MAP[outKey]; // ex: clid -> gclid
-            const v = qs(inKey) || merged[inKey];
-            if (v) final[outKey] = v;
-          });
-          return final;
-        }
+        // --- 2. Função que Constrói a URL Final ---
+        function buildFinalUrl(originalUrl) {
+          try {
+            const url = new URL(originalUrl, window.location.origin);
 
-        function injectIntoUrl(href, finalParams) {
-          const url = new URL(href, window.location.origin);
+            // Se não for link do produto e nem for os botões de CTA, não mexe?
+            // Mas aqui a gente garante validando o domínio ou o contexto antes de chamar.
 
-          // Só mexe se for link do vendor
-          if (!url.host.includes(VENDOR_HOST_MATCH)) return null;
+            Object.keys(OUT_TO_IN_MAP).forEach(outKey => {
+              const inKey = OUT_TO_IN_MAP[outKey];
+              const value = qs(inKey) || merged[inKey]; // URL atual ganha do cookie
 
-          Object.keys(finalParams).forEach(k => {
-            // seta se não existe OU está vazio
-            if (!url.searchParams.has(k) || !url.searchParams.get(k)) {
-              url.searchParams.set(k, finalParams[k]);
-            }
-          });
-
-          return url.toString();
-        }
-
-        function enhanceNode(node) {
-          const fp = buildFinalParams();
-          if (!Object.keys(fp).length) return;
-
-          // A) <a href="...">
-          if (node.tagName && node.tagName.toLowerCase() === "a") {
-            const href = node.getAttribute("href");
-            if (!href) return;
-            const newHref = injectIntoUrl(href, fp);
-            if (newHref) node.setAttribute("href", newHref);
-            return;
-          }
-
-          // B) Qualquer elemento com data-href
-          if (node.getAttribute && node.getAttribute("data-href")) {
-            const dh = node.getAttribute("data-href");
-            const newDh = injectIntoUrl(dh, fp);
-            if (newDh) node.setAttribute("data-href", newDh);
+              // Só adiciona se tiver valor e ainda não existir na URL de destino (ou sobrescreve?)
+              // Melhor sobrescrever/garantir pra evitar envio vazio
+              if (value) {
+                url.searchParams.set(outKey, value);
+              }
+            });
+            return url.toString();
+          } catch (e) {
+            return originalUrl;
           }
         }
 
-        function scanAndEnhance() {
-          // 1) todos os links que vão pro vendor (independente de id)
-          document.querySelectorAll(`a[href*="${VENDOR_HOST_MATCH}"]`).forEach(enhanceNode);
-
-          // 2) qualquer coisa com data-href pro vendor
-          document.querySelectorAll(`[data-href*="${VENDOR_HOST_MATCH}"]`).forEach(enhanceNode);
-
-          // 3) seus botões btn- (se existirem)
-          document.querySelectorAll('[id^="btn-"]').forEach(enhanceNode);
-        }
-
-        // Intercepta clique (pra casos onde o React/JS troca href ou navega via JS)
+        // --- 3. Event Listener Global (Interceptor "Pro") ---
+        // Usa capture=true para pegar o evento o mais cedo possível
         document.addEventListener("click", function (e) {
-          const fp = buildFinalParams();
-          if (!Object.keys(fp).length) return;
+          // Procura o elemento clicado que seja link ou nossos botões
+          const target = e.target.closest("a[href], [id^='btn-']");
 
-          const a = e.target.closest && e.target.closest(`a[href*="${VENDOR_HOST_MATCH}"]`);
-          if (a && a.getAttribute("href")) {
-            const newHref = injectIntoUrl(a.getAttribute("href"), fp);
-            if (newHref) a.setAttribute("href", newHref);
-            return;
-          }
+          if (!target) return;
 
-          const el = e.target.closest && e.target.closest(`[data-href*="${VENDOR_HOST_MATCH}"]`);
-          if (el && el.getAttribute("data-href")) {
-            const newHref = injectIntoUrl(el.getAttribute("data-href"), fp);
-            if (!newHref) return;
-            e.preventDefault();
-            window.location.href = newHref;
+          let href = target.getAttribute("href") || target.getAttribute("data-href");
+
+          // Se não tem link, não temos o que fazer (a menos que seja navegação 100% JS sem URL)
+          if (!href) return;
+
+          // Verifica se é um link que devemos interceptar
+          // 1. Aponta pro domínio do vendor
+          // 2. OU tem ID começando com btn- (CTAs do site)
+          const isVendor = href.includes(VENDOR_DOMAIN);
+          const isCta = target.id && target.id.startsWith("btn-");
+
+          if (isVendor || isCta) {
+            const finalUrl = buildFinalUrl(href);
+
+            // Se gerou um link diferente do original, fazemos o redirect manual
+            if (finalUrl !== href) {
+              e.preventDefault();
+              e.stopImmediatePropagation(); // Impede outros scripts de rodarem (opcional, mas seguro)
+              window.location.href = finalUrl;
+            }
           }
         }, true);
 
-        // Roda agora, depois da hidratação e observa mudanças
-        function init() {
-          scanAndEnhance();
-
-          // Reforços: React/Next às vezes atualiza depois
-          setTimeout(scanAndEnhance, 400);
-          setTimeout(scanAndEnhance, 1500);
-
-          // MutationObserver: pega links que aparecem depois
-          const mo = new MutationObserver(function (mutations) {
-            for (const m of mutations) {
-              if (m.addedNodes && m.addedNodes.length) {
-                m.addedNodes.forEach(n => {
-                  enhanceNode(n);
-                  if (n.querySelectorAll) {
-                    n.querySelectorAll(`a[href*="${VENDOR_HOST_MATCH}"], [data-href*="${VENDOR_HOST_MATCH}"], [id^="btn-"]`)
-                      .forEach(enhanceNode);
-                  }
-                });
-              }
-            }
-          });
-
-          mo.observe(document.documentElement, { childList: true, subtree: true });
-        }
-
-        if (document.readyState === "loading") {
-          document.addEventListener("DOMContentLoaded", init);
-        } else {
-          init();
-        }
       })();
-  </script>
   </script>
 </body>
 
