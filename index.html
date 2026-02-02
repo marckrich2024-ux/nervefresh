@@ -82,6 +82,138 @@
   <!-- End Google Tag Manager (noscript) -->
   <div id="root"></div>
   <script type="module" src="/index.tsx"></script>
+  <script>
+      (function () {
+        const PARAM_KEYS = ["gclid", "wbraid", "gbraid"];
+        const COOKIE_NAME = "ads_click_ids";
+        const COOKIE_DAYS = 90;
+
+        const CTA_IDS = [
+          "btn-nav-check",
+          "btn-hero-check",
+          "btn-mid-check",
+          "btn-verdict-check",
+          "btn-footer-check"
+        ];
+
+        function getQueryParam(key) {
+          return new URLSearchParams(window.location.search).get(key);
+        }
+
+        function setCookie(name, value, days) {
+          const maxAge = days * 24 * 60 * 60;
+          document.cookie = `${name}=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; SameSite=Lax`;
+        }
+
+        function getCookie(name) {
+          const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
+          return match ? decodeURIComponent(match[2]) : null;
+        }
+
+        function safeJsonParse(str) {
+          try { return JSON.parse(str); } catch (e) { return {}; }
+        }
+
+        function readStoredIds() {
+          return safeJsonParse(getCookie(COOKIE_NAME) || "{}");
+        }
+
+        function writeStoredIds(obj) {
+          setCookie(COOKIE_NAME, JSON.stringify(obj), COOKIE_DAYS);
+        }
+
+        // 1) Capture IDs from URL
+        const captured = {};
+        PARAM_KEYS.forEach(k => {
+          const v = getQueryParam(k);
+          if (v) captured[k] = v;
+        });
+
+        // 2) Persist (merge with stored)
+        const stored = readStoredIds();
+        const merged = Object.assign({}, stored, captured);
+        writeStoredIds(merged);
+
+        // 3) Build final params (prefer live URL, fallback stored)
+        function getFinalParams() {
+          const finalParams = {};
+          PARAM_KEYS.forEach(k => {
+            const live = getQueryParam(k);
+            const saved = merged[k];
+            const v = live || saved;
+            if (v) finalParams[k] = v;
+          });
+          return finalParams;
+        }
+
+        function injectParamsIntoUrl(href, finalParams) {
+          // If href is relative, make it absolute for URL parsing
+          const url = new URL(href, window.location.origin);
+
+          Object.keys(finalParams).forEach(k => {
+            if (!url.searchParams.get(k)) {
+              url.searchParams.set(k, finalParams[k]);
+            }
+          });
+
+          return url.toString();
+        }
+
+        function enhanceElement(el) {
+          const finalParams = getFinalParams();
+          if (!Object.keys(finalParams).length) return;
+
+          // A) If it's an <a href="...">
+          if (el.tagName.toLowerCase() === "a" && el.getAttribute("href")) {
+            const href = el.getAttribute("href");
+            const newHref = injectParamsIntoUrl(href, finalParams);
+            el.setAttribute("href", newHref);
+            return;
+          }
+
+          // B) If it has data-href="..."
+          const dataHref = el.getAttribute("data-href");
+          if (dataHref) {
+            const newHref = injectParamsIntoUrl(dataHref, finalParams);
+            el.setAttribute("data-href", newHref);
+          }
+
+          // C) If it's a <button> that navigates by JS or needs a forced redirect:
+          // We’ll redirect on click using href/data-href if present.
+          el.addEventListener("click", function (e) {
+            const finalParamsNow = getFinalParams();
+            if (!Object.keys(finalParamsNow).length) return;
+
+            const hrefNow =
+              (el.tagName.toLowerCase() === "a" && el.getAttribute("href")) ||
+              el.getAttribute("data-href");
+
+            if (!hrefNow) return; // let existing logic work if it doesn't rely on a URL
+
+            e.preventDefault();
+            const target = injectParamsIntoUrl(hrefNow, finalParamsNow);
+            window.location.href = target;
+          }, { passive: false });
+        }
+
+        // Run after DOM is ready
+        function init() {
+          CTA_IDS.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) enhanceElement(el);
+          });
+
+          // Extra safety: handle any CTA with id starting with "btn-"
+          document.querySelectorAll('[id^="btn-"]').forEach(enhanceElement);
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", init);
+        } else {
+          init();
+        }
+      })();
+  </script>
 </body>
 
 </html>
