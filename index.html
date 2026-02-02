@@ -83,62 +83,175 @@
   <div id="root"></div>
   <script type="module" src="/index.tsx"></script>
   <script>
+      < script >
       (function () {
-        const PARAM_KEYS = ["gclid", "wbraid", "gbraid"];
+        // O que pode chegar na URL
+        const IN_KEYS = ["gclid", "wbraid", "gbraid"];
+
+        // O que vamos garantir que saia no link final
+        // (ClickBank/integrações frequentemente usam clid)
+        const OUT_MAP = {
+          gclid: "gclid",
+          clid: "gclid",
+          wbraid: "wbraid",
+          gbraid: "gbraid"
+        };
+
         const COOKIE_NAME = "ads_click_ids";
         const COOKIE_DAYS = 90;
+        const VENDOR_HOST_MATCH = "secure.nervefresh.com";
 
-        function getQueryParam(key) {
+        function qs(key) {
           return new URLSearchParams(window.location.search).get(key);
         }
+
         function setCookie(name, value, days) {
           const maxAge = days * 24 * 60 * 60;
           document.cookie = `${name}=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; SameSite=Lax`;
         }
+
         function getCookie(name) {
           const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
           return match ? decodeURIComponent(match[2]) : null;
         }
-        function safeJsonParse(str) { try { return JSON.parse(str); } catch { return {}; } }
 
-        const captured = {};
-        PARAM_KEYS.forEach(k => { const v = getQueryParam(k); if (v) captured[k] = v; });
-
-        const stored = safeJsonParse(getCookie(COOKIE_NAME) || "{}");
-        const merged = Object.assign({}, stored, captured);
-        setCookie(COOKIE_NAME, JSON.stringify(merged), COOKIE_DAYS);
-
-        function finalParams() {
-          const out = {};
-          PARAM_KEYS.forEach(k => {
-            const v = getQueryParam(k) || merged[k];
-            if (v) out[k] = v;
-          });
-          return out;
+        function safeParse(str) {
+          try { return JSON.parse(str); } catch (e) { return {}; }
         }
 
-        function injectIntoAnchor(a) {
-          const fp = finalParams();
+        function readStored() {
+          return safeParse(getCookie(COOKIE_NAME) || "{}");
+        }
+
+        function writeStored(obj) {
+          setCookie(COOKIE_NAME, JSON.stringify(obj), COOKIE_DAYS);
+        }
+
+        // 1) captura da URL
+        const captured = {};
+        IN_KEYS.forEach(k => {
+          const v = qs(k);
+          if (v) captured[k] = v;
+        });
+
+        // 2) merge com cookie
+        const stored = readStored();
+        const merged = Object.assign({}, stored, captured);
+        writeStored(merged);
+
+        // 3) params finais (preferir live URL, senão cookie)
+        function buildFinalParams() {
+          const final = {};
+          Object.keys(OUT_MAP).forEach(outKey => {
+            const inKey = OUT_MAP[outKey]; // ex: clid -> gclid
+            const v = qs(inKey) || merged[inKey];
+            if (v) final[outKey] = v;
+          });
+          return final;
+        }
+
+        function injectIntoUrl(href, finalParams) {
+          const url = new URL(href, window.location.origin);
+
+          // Só mexe se for link do vendor
+          if (!url.host.includes(VENDOR_HOST_MATCH)) return null;
+
+          Object.keys(finalParams).forEach(k => {
+            // seta se não existe OU está vazio
+            if (!url.searchParams.has(k) || !url.searchParams.get(k)) {
+              url.searchParams.set(k, finalParams[k]);
+            }
+          });
+
+          return url.toString();
+        }
+
+        function enhanceNode(node) {
+          const fp = buildFinalParams();
           if (!Object.keys(fp).length) return;
 
-          const url = new URL(a.getAttribute("href"), window.location.origin);
-          Object.keys(fp).forEach(k => {
-            if (!url.searchParams.get(k)) url.searchParams.set(k, fp[k]);
-          });
-          a.setAttribute("href", url.toString());
+          // A) <a href="...">
+          if (node.tagName && node.tagName.toLowerCase() === "a") {
+            const href = node.getAttribute("href");
+            if (!href) return;
+            const newHref = injectIntoUrl(href, fp);
+            if (newHref) node.setAttribute("href", newHref);
+            return;
+          }
+
+          // B) Qualquer elemento com data-href
+          if (node.getAttribute && node.getAttribute("data-href")) {
+            const dh = node.getAttribute("data-href");
+            const newDh = injectIntoUrl(dh, fp);
+            if (newDh) node.setAttribute("data-href", newDh);
+          }
         }
 
+        function scanAndEnhance() {
+          // 1) todos os links que vão pro vendor (independente de id)
+          document.querySelectorAll(`a[href*="${VENDOR_HOST_MATCH}"]`).forEach(enhanceNode);
+
+          // 2) qualquer coisa com data-href pro vendor
+          document.querySelectorAll(`[data-href*="${VENDOR_HOST_MATCH}"]`).forEach(enhanceNode);
+
+          // 3) seus botões btn- (se existirem)
+          document.querySelectorAll('[id^="btn-"]').forEach(enhanceNode);
+        }
+
+        // Intercepta clique (pra casos onde o React/JS troca href ou navega via JS)
+        document.addEventListener("click", function (e) {
+          const fp = buildFinalParams();
+          if (!Object.keys(fp).length) return;
+
+          const a = e.target.closest && e.target.closest(`a[href*="${VENDOR_HOST_MATCH}"]`);
+          if (a && a.getAttribute("href")) {
+            const newHref = injectIntoUrl(a.getAttribute("href"), fp);
+            if (newHref) a.setAttribute("href", newHref);
+            return;
+          }
+
+          const el = e.target.closest && e.target.closest(`[data-href*="${VENDOR_HOST_MATCH}"]`);
+          if (el && el.getAttribute("data-href")) {
+            const newHref = injectIntoUrl(el.getAttribute("data-href"), fp);
+            if (!newHref) return;
+            e.preventDefault();
+            window.location.href = newHref;
+          }
+        }, true);
+
+        // Roda agora, depois da hidratação e observa mudanças
         function init() {
-          // ✅ pega TODOS os links que saem pra ClickBank/vendor (à prova de wrapper errado)
-          document.querySelectorAll('a[href*="secure.nervefresh.com"]').forEach(injectIntoAnchor);
+          scanAndEnhance();
 
-          // fallback: qualquer id que começa com btn- se for <a>
-          document.querySelectorAll('a[id^="btn-"]').forEach(injectIntoAnchor);
+          // Reforços: React/Next às vezes atualiza depois
+          setTimeout(scanAndEnhance, 400);
+          setTimeout(scanAndEnhance, 1500);
+
+          // MutationObserver: pega links que aparecem depois
+          const mo = new MutationObserver(function (mutations) {
+            for (const m of mutations) {
+              if (m.addedNodes && m.addedNodes.length) {
+                m.addedNodes.forEach(n => {
+                  enhanceNode(n);
+                  if (n.querySelectorAll) {
+                    n.querySelectorAll(`a[href*="${VENDOR_HOST_MATCH}"], [data-href*="${VENDOR_HOST_MATCH}"], [id^="btn-"]`)
+                      .forEach(enhanceNode);
+                  }
+                });
+              }
+            }
+          });
+
+          mo.observe(document.documentElement, { childList: true, subtree: true });
         }
 
-        if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
-        else init();
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", init);
+        } else {
+          init();
+        }
       })();
+  </script>
   </script>
 </body>
 
