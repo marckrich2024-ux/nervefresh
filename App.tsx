@@ -100,8 +100,8 @@ const Header = () => {
             <a href="#faq" onClick={() => handleLinkClick('faq')} className="font-medium text-gray-800 py-2">FAQ</a>
             <a
               href={OFFER_URL}
-              id="cta_header_mobile"
-              onClick={() => trackEvent('cta_click', { cta_id: 'cta_header_mobile' })}
+              id="btn-header-mobile"
+              onClick={() => trackEvent('cta_click', { cta_id: 'btn-header-mobile' })}
               className="bg-brand-green text-white font-bold py-3 px-8 rounded-lg w-[90%] text-center shadow-lg uppercase"
             >
               Check Official Availability
@@ -698,8 +698,8 @@ const StickerCTA = () => {
         </div>
         <a
           href={OFFER_URL}
-          id="cta_sticky_mobile"
-          onClick={() => trackEvent('cta_click', { cta_id: 'cta_sticky_mobile' })}
+          id="btn-sticky-mobile"
+          onClick={() => trackEvent('cta_click', { cta_id: 'btn-sticky-mobile' })}
           className="flex-1 bg-brand-green text-white font-bold py-3 rounded-lg text-center uppercase text-sm shadow-md"
         >
           View Official Details
